@@ -56,6 +56,8 @@ func (qu *Queue) AddJob(queueName string, job models.Job) error {
 		return err
 	}
 
+	qu.metrics.JobSubmitted()
+
 	qu.q[queueName] = append(qu.q[queueName], job)
 
 	return nil
@@ -100,6 +102,8 @@ func (qu *Queue) RequestJob(queueName string) (models.Job, error) {
 					}
 					jobs[i].LeaseExpiresAt = now.Add(jobs[i].LeaseDuration)
 
+					qu.metrics.JobLeased()
+
 					return jobs[i], nil
 				}
 			}
@@ -135,6 +139,7 @@ func (qu *Queue) UpdateJob(queueName string, job models.Job) (models.Job, error)
 							return j, err
 						}
 
+						qu.metrics.JobCompleted()
 					}
 
 					// update the job
@@ -210,6 +215,8 @@ func (qu *Queue) CheckForExpiredLeases() {
 						continue
 					}
 
+					qu.metrics.JobDeadLettered()
+
 					jobs[i] = updated
 					qu.dlq[k] = append(qu.dlq[k], jobs[i])
 				} else {
@@ -238,6 +245,8 @@ func (qu *Queue) CheckForExpiredLeases() {
 						survivors = append(survivors, jobs[i])
 						continue
 					}
+
+					qu.metrics.JobRetried()
 
 					jobs[i] = updated
 					survivors = append(survivors, jobs[i])
@@ -307,6 +316,8 @@ func (qu *Queue) FailOrRetry(jobID uuid.UUID) (*models.Job, error) {
 						return nil, err
 					}
 
+					qu.metrics.JobDeadLettered()
+
 					deadJob := updated
 
 					qu.q[k] = slices.Delete(jobs, i, i+1)
@@ -330,6 +341,8 @@ func (qu *Queue) FailOrRetry(jobID uuid.UUID) (*models.Job, error) {
 				if err != nil {
 					return nil, err
 				}
+
+				qu.metrics.JobRetried()
 
 				jobs[i] = updated
 
@@ -375,6 +388,8 @@ func (qu *Queue) RedriveJob(queueName string, jobId uuid.UUID) (models.Job, erro
 				return j, err
 			}
 
+			qu.metrics.DLQRedriven()
+
 			dlqJobs[i].Status = models.StatusPending
 			dlqJobs[i].RetryCount = 0
 			dlqJobs[i].NextRunAt = time.Time{}
@@ -408,6 +423,8 @@ func (qu *Queue) DiscardDeadJob(queueName string, jobId uuid.UUID) error {
 			if err != nil {
 				return err
 			}
+
+			qu.metrics.DLQDiscarded()
 
 			qu.dlq[queueName] = slices.Delete(dlqJobs, i, i+1)
 			return nil
@@ -559,6 +576,7 @@ func (qu *Queue) Recover() error {
 			}
 		}
 	}
+
 
 	return nil
 }

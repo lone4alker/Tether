@@ -9,10 +9,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/lone4alker/tether/internal/metrics"
 	"github.com/lone4alker/tether/internal/models"
 	"github.com/lone4alker/tether/internal/wal"
+	"github.com/google/uuid"
 )
 
 type BrokerServer struct {
@@ -20,8 +20,8 @@ type BrokerServer struct {
 	metrics *metrics.Metrics
 }
 
-// POST /queues/{queueName}/jobs - AddJob
-// GET  /queues/{queueName}/jobs - RequestJob
+// POST /queues/{queueName}/jobs        - AddJob
+// GET  /queues/{queueName}/jobs        - RequestJob
 // PUT  /queues/{queueName}/jobs/{jobId} - UpdateJob
 
 func NewBrokerServer(walPath string) (*BrokerServer, error) {
@@ -62,7 +62,6 @@ func (bs *BrokerServer) AddJob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	bs.metrics.JobSubmitted()
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(job)
