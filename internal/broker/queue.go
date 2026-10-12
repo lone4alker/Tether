@@ -3,6 +3,7 @@ package broker
 import (
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -21,10 +22,12 @@ const (
 )
 
 type Job struct {
-	Id      uuid.UUID
-	Name    string
-	Payload map[string]any
-	Status  JobStatus
+	Id          uuid.UUID
+	Name        string
+	Payload     map[string]any
+	Status      JobStatus
+	CreatedAt   time.Time
+	CompletedAt time.Time
 }
 
 type Queue struct {
@@ -87,4 +90,30 @@ func (qu *Queue) RequestJob(queueName string) (Job, error) {
 
 	}
 	return j, ErrNoJobAvailable
+}
+
+// update job
+func (qu *Queue) UpdateJob(queueName string, job Job) (Job, error) {
+	qu.mu.Lock()
+	defer qu.mu.Unlock()
+	// find the job
+	jobs, ok := qu.q[queueName]
+	var j Job
+	if ok {
+		if len(jobs) == 0 {
+			return j, ErrEmptyQueue
+		} else {
+			for i := range jobs {
+				if jobs[i].Id == job.Id {
+					// update the job
+					jobs[i].Status = job.Status
+					jobs[i].CompletedAt = job.CompletedAt
+					return jobs[i], nil
+				}
+			}
+			return j, errors.New("Job with ID: " + job.Id.String() + " not found in Queue")
+		}
+	}
+
+	return j, ErrJobNotFound
 }
