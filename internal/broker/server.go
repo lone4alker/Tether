@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lone4alker/tether/internal/models"
+	"github.com/lone4alker/tether/internal/wal"
 )
 
 type BrokerServer struct {
@@ -19,10 +20,16 @@ type BrokerServer struct {
 // GET  /queues/{queueName}/jobs - RequestJob
 // PUT  /queues/{queueName}/jobs/{jobId} - UpdateJob
 
-func NewBrokerServer() *BrokerServer {
-	q := NewQueue()
+func NewBrokerServer(walPath string) (*BrokerServer, error) {
+	w, err := wal.Open(walPath)
 
-	return &BrokerServer{queue: q}
+	if err != nil {
+		return nil, err
+	}
+
+	q := NewQueue(w)
+
+	return &BrokerServer{queue: q}, nil
 }
 
 func (bs *BrokerServer) AddJob(w http.ResponseWriter, r *http.Request) {
@@ -259,4 +266,8 @@ func (bs *BrokerServer) Start(port string) error {
 
 func (bs *BrokerServer) StartLeaseChecker() {
 	bs.queue.CheckForExpiredLeases()
+}
+
+func (bs *BrokerServer) Close() error {
+	return bs.queue.wal.Close()
 }

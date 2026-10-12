@@ -29,7 +29,11 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
-	brokerServer := broker.NewBrokerServer()
+	brokerServer, err := broker.NewBrokerServer("tether.wal")
+
+	if err != nil {
+		log.Fatalf("failed to start broker: %v", err)
+	}
 
 	p := func(j models.Job) error {
 		return nil
@@ -53,5 +57,9 @@ func main() {
 	<-quit
 	workerPool.StopWorkerPool()
 	close(stopCh)
+
+	if err := brokerServer.Close(); err != nil {
+		log.Printf("error closing broker: %v", err)
+	}
 
 }

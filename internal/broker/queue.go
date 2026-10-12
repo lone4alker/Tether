@@ -2,13 +2,15 @@ package broker
 
 import (
 	"errors"
+	"log/slog"
 	"math/rand/v2"
 	"slices"
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/lone4alker/tether/internal/models"
+	"github.com/lone4alker/tether/internal/wal"
+	"github.com/google/uuid"
 )
 
 var ErrJobNotFound = errors.New("No Job found in Queue")
@@ -18,17 +20,19 @@ var ErrJobNotInProgress = errors.New("job is not in progress")
 var ErrNoJobAvailable = errors.New("No Jobs Available")
 
 type Queue struct {
-	q   map[string][]models.Job
-	dlq map[string][]models.Job
-	mu  sync.RWMutex
+	q       map[string][]models.Job
+	dlq     map[string][]models.Job
+	mu      sync.RWMutex
+	wal     *wal.WAL
 }
 
-func NewQueue() *Queue {
+func NewQueue(w *wal.WAL) *Queue {
 	q := make(map[string][]models.Job)
 	dq := make(map[string][]models.Job)
 	return &Queue{
-		q:   q,
-		dlq: dq,
+		q:       q,
+		dlq:     dq,
+		wal:     w,
 	}
 }
 
@@ -36,6 +40,16 @@ func NewQueue() *Queue {
 func (qu *Queue) AddJob(queueName string, job models.Job) error {
 	qu.mu.Lock()
 	defer qu.mu.Unlock()
+
+	rec, err := wal.NewRecord(wal.RecordCreated, wal.JobCreatedPayload{QueueName: queueName, Job: job})
+	if err != nil {
+		return err
+	}
+
+	err = qu.wal.Append(rec)
+	if err != nil {
+		return err
+	}
 
 	qu.q[queueName] = append(qu.q[queueName], job)
 
@@ -80,6 +94,7 @@ func (qu *Queue) RequestJob(queueName string) (models.Job, error) {
 						jobs[i].LeaseDuration = 30 * time.Second // this is a sample time
 					}
 					jobs[i].LeaseExpiresAt = now.Add(jobs[i].LeaseDuration)
+
 					return jobs[i], nil
 				}
 			}
@@ -102,6 +117,21 @@ func (qu *Queue) UpdateJob(queueName string, job models.Job) (models.Job, error)
 		} else {
 			for i := range jobs {
 				if jobs[i].Id == job.Id {
+					// log jobs which are completed to WAL
+					if job.Status == models.StatusCompleted {
+						rec, err := wal.NewRecord(wal.RecordDone, wal.JobDonePayload{JobID: job.Id, QueueName: queueName})
+
+						if err != nil {
+							return j, err
+						}
+
+						err = qu.wal.Append(rec)
+						if err != nil {
+							return j, err
+						}
+
+					}
+
 					// update the job
 					jobs[i].Status = job.Status
 					jobs[i].CompletedAt = job.CompletedAt
@@ -115,6 +145,7 @@ func (qu *Queue) UpdateJob(queueName string, job models.Job) (models.Job, error)
 
 	return j, ErrJobNotFound
 }
+
 func applyFailOrRetry(job *models.Job) bool {
 	if job.RetryCount >= job.MaxRetries {
 		job.Status = models.StatusFailed
@@ -152,9 +183,57 @@ func (qu *Queue) CheckForExpiredLeases() {
 				dead := applyFailOrRetry(&updated)
 
 				if dead {
+					rec, err := wal.NewRecord(wal.RecordMovedToDLQ, wal.JobMovedToDLQPayload{JobID: updated.Id, QueueName: k})
+
+					if err != nil {
+						slog.Error("failed to create DLQ record",
+							"error", err,
+							"job_id", jobs[i].Id,
+							"queue", k,
+							"attempts", jobs[i].RetryCount)
+						survivors = append(survivors, jobs[i])
+						continue
+					}
+
+					if err := qu.wal.Append(rec); err != nil {
+						slog.Error("failed to persist DLQ record to WAL",
+							"error", err,
+							"job_id", jobs[i].Id,
+							"queue", k,
+							"attempts", jobs[i].RetryCount)
+						survivors = append(survivors, jobs[i])
+						continue
+					}
+
 					jobs[i] = updated
 					qu.dlq[k] = append(qu.dlq[k], jobs[i])
 				} else {
+					rec, err := wal.NewRecord(wal.RecordFailed, wal.JobFailedPayload{
+						JobID:      updated.Id,
+						RetryCount: updated.RetryCount,
+						NextRunAt:  updated.NextRunAt,
+					})
+
+					if err != nil {
+						slog.Error("failed to create lease expiry record",
+							"error", err,
+							"job_id", jobs[i].Id,
+							"queue", k,
+							"attempts", jobs[i].RetryCount)
+						survivors = append(survivors, jobs[i])
+						continue
+					}
+
+					if err := qu.wal.Append(rec); err != nil {
+						slog.Error("failed to persist lease expiry to WAL",
+							"error", err,
+							"job_id", jobs[i].Id,
+							"queue", k,
+							"attempts", jobs[i].RetryCount)
+						survivors = append(survivors, jobs[i])
+						continue
+					}
+
 					jobs[i] = updated
 					survivors = append(survivors, jobs[i])
 				}
@@ -212,6 +291,17 @@ func (qu *Queue) FailOrRetry(jobID uuid.UUID) (*models.Job, error) {
 				dead := applyFailOrRetry(&updated)
 
 				if dead {
+					rec, err := wal.NewRecord(wal.RecordMovedToDLQ, wal.JobMovedToDLQPayload{JobID: jobID, QueueName: k})
+					if err != nil {
+						return nil, err
+					}
+
+					//Append to WAL
+					err = qu.wal.Append(rec)
+					if err != nil {
+						return nil, err
+					}
+
 					deadJob := updated
 
 					qu.q[k] = slices.Delete(jobs, i, i+1)
@@ -219,6 +309,21 @@ func (qu *Queue) FailOrRetry(jobID uuid.UUID) (*models.Job, error) {
 
 					return &deadJob, nil
 
+				}
+
+				rec, err := wal.NewRecord(wal.RecordFailed, wal.JobFailedPayload{
+					JobID:      jobID,
+					RetryCount: updated.RetryCount,
+					NextRunAt:  updated.NextRunAt,
+				})
+
+				if err != nil {
+					return nil, err
+				}
+
+				err = qu.wal.Append(rec)
+				if err != nil {
+					return nil, err
 				}
 
 				jobs[i] = updated
@@ -254,6 +359,17 @@ func (qu *Queue) RedriveJob(queueName string, jobId uuid.UUID) (models.Job, erro
 
 	for i := range dlqJobs {
 		if dlqJobs[i].Id == jobId {
+
+			rec, err := wal.NewRecord(wal.RecordRedrive, wal.JobRedrivePayload{JobID: jobId, QueueName: queueName})
+
+			if err != nil {
+				return j, err
+			}
+
+			if err := qu.wal.Append(rec); err != nil {
+				return j, err
+			}
+
 			dlqJobs[i].Status = models.StatusPending
 			dlqJobs[i].RetryCount = 0
 			dlqJobs[i].NextRunAt = time.Time{}
@@ -276,6 +392,18 @@ func (qu *Queue) DiscardDeadJob(queueName string, jobId uuid.UUID) error {
 
 	for i := range dlqJobs {
 		if dlqJobs[i].Id == jobId {
+			rec, err := wal.NewRecord(wal.RecordDiscard, wal.JobDiscardPayload{JobID: jobId, QueueName: queueName})
+
+			if err != nil {
+				return err
+			}
+
+			err = qu.wal.Append(rec)
+
+			if err != nil {
+				return err
+			}
+
 			qu.dlq[queueName] = slices.Delete(dlqJobs, i, i+1)
 			return nil
 		}

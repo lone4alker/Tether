@@ -1,17 +1,24 @@
 package broker
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/lone4alker/tether/internal/models"
+	"github.com/lone4alker/tether/internal/wal"
 	"github.com/google/uuid"
 )
 
 func newTestQueue(t *testing.T) *Queue {
 	t.Helper()
-	return NewQueue()
+	w, err := wal.Open(filepath.Join(t.TempDir(), "test.wal"))
+
+	if err != nil {
+		t.Fatalf("opening test wal: %v", err)
+	}
+	return NewQueue(w)
 }
 
 func createJob() models.Job {
