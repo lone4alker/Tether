@@ -12,8 +12,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/lone4alker/tether/internal/models"
+	"github.com/google/uuid"
 )
 
 var LeaseLostErr = errors.New("lease lost")
@@ -29,7 +29,8 @@ const (
 )
 
 // defaultPollInterval is how often a worker polls the broker for a job when no
-// interval is configured.
+// interval is configured. Kept at 30s for production; the demo overrides it via
+// TETHER_WORKER_POLL_INTERVAL so the crash-recovery GIF stays lively.
 const defaultPollInterval = 30 * time.Second
 
 type Worker struct {
@@ -89,6 +90,10 @@ func (w *Worker) Start(stopCh <-chan struct{}) {
 				if resp.StatusCode == http.StatusNotFound {
 					w.logger.Debug("no job available", "job_type", w.JobType)
 					return
+				}
+
+				if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+					w.logger.Error("unexpected status fetching job", "status", resp.StatusCode, "job_type", w.JobType)
 				}
 
 				var job models.Job
