@@ -3,12 +3,14 @@ package broker
 import (
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/lone4alker/tether/internal/models"
 )
 
 var ErrJobNotFound = errors.New("No Job found in Queue")
+var ErrLeaseNotRenewable = errors.New("cannot renew lease not in progress")
 var ErrEmptyQueue = errors.New("queue is empty")
 var ErrNoJobAvailable = errors.New("No Jobs Available")
 
@@ -65,6 +67,13 @@ func (qu *Queue) RequestJob(queueName string) (models.Job, error) {
 			for i := range jobs {
 				if jobs[i].Status == models.StatusPending {
 					jobs[i].Status = models.StatusInProgress
+					now := time.Now()
+					jobs[i].StartedAt = now
+					// check if there's a LeaseDuration
+					if jobs[i].LeaseDuration == 0 {
+						jobs[i].LeaseDuration = 30 * time.Second // this is a sample time
+					}
+					jobs[i].LeaseExpiresAt = now.Add(jobs[i].LeaseDuration)
 					return jobs[i], nil
 				}
 			}
@@ -98,4 +107,50 @@ func (qu *Queue) UpdateJob(queueName string, job models.Job) (models.Job, error)
 	}
 
 	return j, ErrJobNotFound
+}
+// method to check for expired leases
+func (qu *Queue) CheckForExpiredLeases() {
+	qu.mu.Lock()
+	defer qu.mu.Unlock()
+
+	for k, jobs := range qu.q {
+		for i := range jobs {
+			if time.Now().After(jobs[i].LeaseExpiresAt) && jobs[i].Status == models.StatusInProgress {
+				qu.q[k][i].Status = models.StatusPending
+				qu.q[k][i].LeaseExpiresAt = time.Time{}
+				qu.q[k][i].StartedAt = time.Time{}
+			}
+		}
+	}
+}
+
+// lease renewal method
+func (qu *Queue) LeaseRenewal(queueName string, jobID uuid.UUID) (models.Job, error) {
+	qu.mu.Lock()
+	defer qu.mu.Unlock()
+	// find the job
+	jobs, ok := qu.q[queueName]
+	var j models.Job
+
+	if ok {
+		if len(jobs) == 0 {
+			return j, ErrEmptyQueue
+		} else {
+			for i := range jobs {
+				if jobs[i].Id == jobID {
+					if jobs[i].Status == models.StatusInProgress {
+						jobs[i].LeaseExpiresAt = time.Now().Add(jobs[i].LeaseDuration)
+						return jobs[i], nil
+					} else {
+						return j, ErrLeaseNotRenewable
+
+					}
+				}
+			}
+			return j, errors.New("Job with ID: " + jobID.String() + " not found in Queue")
+		}
+	}
+
+	return j, ErrJobNotFound
+
 }

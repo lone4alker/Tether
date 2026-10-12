@@ -16,11 +16,14 @@ const (
 )
 
 type Job struct {
-	Id          uuid.UUID      `json:"id"`
-	Name        string         `json:"name"`
-	TaskType    string         `json:"task_type"`
-	Payload     map[string]any `json:"payload"`
-	Status      JobStatus      `json:"status"`
-	CreatedAt   time.Time      `json:"created_at"`
-	CompletedAt time.Time      `json:"completed_at"`
+	Id             uuid.UUID      `json:"id"`
+	Name           string         `json:"name"`
+	TaskType       string         `json:"task_type"`
+	Payload        map[string]any `json:"payload"`
+	Status         JobStatus      `json:"status"`
+	CreatedAt      time.Time      `json:"created_at"`
+	StartedAt      time.Time      `json:"started_at"`
+	CompletedAt    time.Time      `json:"completed_at"`
+	LeaseDuration  time.Duration  `json:"lease_duration"`
+	LeaseExpiresAt time.Time      `json:"lease_expires_at"`
 }

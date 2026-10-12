@@ -16,6 +16,7 @@ import (
 	"github.com/lone4alker/tether/internal/models"
 )
 
+var LeaseLostErr = errors.New("lease lost")
 var NotFoundError = errors.New("job Id not found")
 var BadRequestError = errors.New("bad request")
 
@@ -92,7 +93,7 @@ func (w *Worker) Start(stopCh <-chan struct{}) {
 				w.logger.Info("job received", "job_id", job.Id, "job_type", w.JobType)
 
 				//else -> Process and Update the broker
-				w.ProcessJob(job)
+				w.ProcessJob(job, stopCh)
 			}()
 		}
 	}
@@ -149,16 +150,99 @@ func (w *Worker) updateJobRequest(job models.Job) error {
 	return nil
 }
 
-func (w *Worker) ProcessJob(job models.Job) {
-	if err := w.Process(job); err != nil {
-		w.logger.Error("job failed", "error", err, "job_id", job.Id, "job_type", w.JobType)
-		return
+func (w *Worker) sendHeartbeat(job models.Job) error {
+	endpoint := fmt.Sprintf("%s/queues/%s/jobs/%s/heartbeat", w.BrokerEndpoint, w.JobType, job.Id)
+
+	bodyBytes, err := json.Marshal(job)
+
+	if err != nil {
+		return fmt.Errorf("error marshalling bodybytes: %w", err)
 	}
 
-	job.Status = models.StatusCompleted
-	job.CompletedAt = time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
-	if updateErr := w.updateJobRequest(job); updateErr != nil {
-		w.logger.Error("failed to update completed job on broker", "error", updateErr, "job_id", job.Id, "job_type", w.JobType)
+	postBody := bytes.NewBuffer(bodyBytes)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, postBody)
+
+	if err != nil {
+		return fmt.Errorf("error making http post request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	res, err := client.Do(req)
+
+	if err != nil {
+		return fmt.Errorf("error, request failed: %w", err)
+	}
+
+	defer res.Body.Close()
+
+	if res.StatusCode == http.StatusBadRequest {
+		return BadRequestError
+	}
+
+	if res.StatusCode == http.StatusNotFound {
+		return NotFoundError
+	}
+
+	if res.StatusCode == http.StatusConflict {
+		return LeaseLostErr
+	}
+
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return fmt.Errorf("unexpected status: %s", res.Status)
+	}
+
+	if _, err := io.ReadAll(res.Body); err != nil {
+		return fmt.Errorf("error %w", err)
+	}
+
+	w.logger.Debug("heartbeat acknowledged", "job_id", job.Id, "job_type", w.JobType)
+
+	return nil
+}
+
+func (w *Worker) ProcessJob(job models.Job, stopCh <-chan struct{}) {
+	resultCh := make(chan error, 1)
+
+	go func() {
+		resultCh <- w.Process(job)
+	}()
+
+	heartBeat := time.NewTicker(10 * time.Second)
+	defer heartBeat.Stop()
+
+	for {
+		select {
+		case <-heartBeat.C:
+			if err := w.sendHeartbeat(job); err != nil {
+				if errors.Is(err, LeaseLostErr) {
+					w.logger.Warn("lease lost, abandoning job", "job_id", job.Id, "job_type", w.JobType)
+					return
+				}
+				w.logger.Error("heartbeat failed, will retry next tick", "error", err, "job_id", job.Id, "job_type", w.JobType)
+			}
+		case err := <-resultCh:
+			if err != nil {
+				w.logger.Error("job failed", "error", err, "job_id", job.Id, "job_type", w.JobType)
+				return
+			}
+
+			job.Status = models.StatusCompleted
+			job.CompletedAt = time.Now()
+
+			updateErr := w.updateJobRequest(job)
+
+			if updateErr != nil {
+				w.logger.Error("failed to update completed job on broker", "error", updateErr, "job_id", job.Id, "job_type", w.JobType)
+			}
+
+			return
+		case <-stopCh:
+			return
+		}
 	}
 }
