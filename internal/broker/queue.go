@@ -2,6 +2,7 @@ package broker
 
 import (
 	"errors"
+	"math/rand/v2"
 	"slices"
 	"sync"
 	"time"
@@ -120,10 +121,17 @@ func applyFailOrRetry(job *models.Job) bool {
 		return true
 	} else {
 
-		delay := time.Duration(1<<job.RetryCount) * time.Second
+		shift := min(job.RetryCount, 20)
+		delay := time.Duration(1<<shift) * time.Second
+		const maxDelay = 3 * time.Minute
+
+		delay = min(delay, maxDelay)
+
+		jitter := time.Duration(rand.Float64() * float64(delay) * 0.5)
+		backoff := delay + jitter
 
 		job.Status = models.StatusPending
-		job.NextRunAt = time.Now().Add(delay)
+		job.NextRunAt = time.Now().Add(backoff)
 		job.RetryCount++
 		job.LeaseExpiresAt = time.Time{}
 		job.StartedAt = time.Time{}

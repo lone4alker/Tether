@@ -34,7 +34,7 @@ func main() {
 	p := func(j models.Job) error {
 		return nil
 	}
-	workerPool := worker.NewWorkerPool(3, "http://localhost:8080", "email_job", p)
+	workerPool := worker.NewWorkerPool(3, "http://localhost:8080", "email_job", p, 0)
 
 	workerPool.StartWorkerPool()
 

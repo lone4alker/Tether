@@ -1,8 +1,10 @@
 package worker
 
 import (
-	"github.com/google/uuid"
+	"time"
+
 	"github.com/lone4alker/tether/internal/models"
+	"github.com/google/uuid"
 )
 
 type WorkerPool struct {
@@ -12,9 +14,10 @@ type WorkerPool struct {
 	brokerEndpoint string
 	jobType        string
 	process        func(models.Job) error
+	pollInterval   time.Duration
 }
 
-func NewWorkerPool(workerCount int, brokerEndpoint string, jobType string, processFunc func(models.Job) error) *WorkerPool {
+func NewWorkerPool(workerCount int, brokerEndpoint string, jobType string, processFunc func(models.Job) error, pollInterval time.Duration) *WorkerPool {
 	w := make(map[uuid.UUID]*Worker)
 	stopCh := make(chan struct{})
 	return &WorkerPool{
@@ -24,12 +27,13 @@ func NewWorkerPool(workerCount int, brokerEndpoint string, jobType string, proce
 		brokerEndpoint: brokerEndpoint,
 		jobType:        jobType,
 		process:        processFunc,
+		pollInterval:   pollInterval,
 	}
 }
 
 func (w *WorkerPool) StartWorkerPool() {
 	for i := 0; i < w.workerCount; i++ {
-		worker := NewWorker(w.brokerEndpoint, w.process, w.jobType)
+		worker := NewWorker(w.brokerEndpoint, w.process, w.jobType, w.pollInterval)
 
 		go worker.Start(w.stopCh)
 

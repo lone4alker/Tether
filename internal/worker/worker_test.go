@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/lone4alker/tether/internal/models"
+	"github.com/google/uuid"
 )
 
 // newTestJob builds a minimal job for exercising ProcessJob.
@@ -39,7 +39,9 @@ func TestProcessJob_Success(t *testing.T) {
 		return nil // pretend the work succeeded
 	}
 
-	w := NewWorker(srv.URL, process, "email_job")
+	// pollInterval is unused here (ProcessJob is called directly, not Start);
+	// 0 falls back to the default in NewWorker.
+	w := NewWorker(srv.URL, process, "email_job", 0)
 
 	stopCh := make(chan struct{})
 	w.ProcessJob(newTestJob(), stopCh) // blocks until the job finishes
@@ -64,7 +66,9 @@ func TestProcessJob_LeaseLost(t *testing.T) {
 		return nil
 	}
 
-	w := NewWorker(srv.URL, process, "email_job")
+	// pollInterval is unused here (ProcessJob is called directly, not Start);
+	// 0 falls back to the default in NewWorker.
+	w := NewWorker(srv.URL, process, "email_job", 0)
 
 	done := make(chan struct{})
 	go func() {
