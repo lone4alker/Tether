@@ -343,3 +343,43 @@ func TestLeaseRenewal(t *testing.T) {
 		})
 	}
 }
+
+func TestRecover(t *testing.T) {
+	walPath := filepath.Join(t.TempDir(), "recover.wal")
+
+	// First "process": open a WAL, add jobs, then close it.
+	w1, err := wal.Open(walPath)
+	if err != nil {
+		t.Fatalf("open wal: %v", err)
+	}
+	q1 := NewQueue(w1)
+
+	j := createJob()
+	j.Id = uuid.New()
+	if err := q1.AddJob("email", j); err != nil {
+		t.Fatalf("add job: %v", err)
+	}
+	w1.Close() // simulate the process dying
+
+	// Second "process": fresh queue, same WAL path, recover.
+	w2, err := wal.Open(walPath)
+	if err != nil {
+		t.Fatalf("reopen wal: %v", err)
+	}
+	q2 := NewQueue(w2)
+	if err := q2.Recover(); err != nil {
+		t.Fatalf("recover: %v", err)
+	}
+
+	// The job written before the "crash" should be back.
+	got, err := q2.ReadJobById("email", j.Id)
+	if err != nil {
+		t.Fatalf("job not recovered: %v", err)
+	}
+	if got.Id != j.Id {
+		t.Errorf("got id %v, want %v", got.Id, j.Id)
+	}
+	if got.Status != models.StatusPending {
+		t.Errorf("recovered job status = %v, want pending", got.Status)
+	}
+}

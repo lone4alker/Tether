@@ -29,6 +29,10 @@ func NewBrokerServer(walPath string) (*BrokerServer, error) {
 
 	q := NewQueue(w)
 
+	if err := q.Recover(); err != nil {
+		return nil, err
+	}
+
 	return &BrokerServer{queue: q}, nil
 }
 

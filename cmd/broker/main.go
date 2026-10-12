@@ -5,7 +5,10 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"log/slog"
 	"time"
+
+	"github.com/joho/godotenv"
 
 	"github.com/lone4alker/tether/internal/broker"
 	"github.com/lone4alker/tether/internal/models"
@@ -29,7 +32,18 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
-	brokerServer, err := broker.NewBrokerServer("tether.wal")
+	if err := godotenv.Load(); err != nil {
+		slog.Info("no .env file loaded; using process environment", "error", err)
+	}
+
+	val := os.Getenv("TETHER_WAL_PATH")
+	slog.Info("wal path resolved", "path", val)
+
+	if val == "" {
+		val = "tether.wal"
+	}
+
+	brokerServer, err := broker.NewBrokerServer(val)
 
 	if err != nil {
 		log.Fatalf("failed to start broker: %v", err)
