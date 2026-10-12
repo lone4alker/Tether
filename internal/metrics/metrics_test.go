@@ -89,6 +89,21 @@ func TestMetricsTransitions(t *testing.T) {
 	}
 }
 
+// SetPending/SetDLQSize must Store (overwrite), not Add. This proves it:
+// a prior increment is discarded, not summed.
+func TestRecoverySettersOverwrite(t *testing.T) {
+	var m Metrics
+	m.JobSubmitted() // pending is now 1
+	m.SetPending(47) // must become 47, not 48
+	m.SetDLQSize(5)
+
+	got := m.Snapshot()
+	want := Snapshot{Submitted: 1, Pending: 47, DLQSize: 5}
+	if got != want {
+		t.Errorf("after recovery setters\n got: %+v\nwant: %+v", got, want)
+	}
+}
+
 // The reason atomics exist. With a plain int field this fails the count
 // (and trips -race). With atomic.Int64 it passes cleanly under contention.
 func TestConcurrentIncrements(t *testing.T) {

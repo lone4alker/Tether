@@ -577,6 +577,18 @@ func (qu *Queue) Recover() error {
 		}
 	}
 
+	// after the reset loop, every job in qu.q is pending
+	var pending int64
+	for _, jobs := range qu.q {
+		pending += int64(len(jobs))
+	}
+	qu.metrics.SetPending(pending)
+
+	var dlq int64
+	for _, jobs := range qu.dlq {
+		dlq += int64(len(jobs))
+	}
+	qu.metrics.SetDLQSize(dlq)
 
 	return nil
 }
