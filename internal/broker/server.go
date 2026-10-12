@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lone4alker/tether/internal/models"
 )
 
 type BrokerServer struct {
@@ -25,7 +26,7 @@ func NewBrokerServer() *BrokerServer {
 
 func (bs *BrokerServer) AddJob(w http.ResponseWriter, r *http.Request) {
 	queueName := r.PathValue("queueName")
-	var job Job
+	var job models.Job
 
 	err := json.NewDecoder(r.Body).Decode(&job)
 	if err != nil {
@@ -35,7 +36,7 @@ func (bs *BrokerServer) AddJob(w http.ResponseWriter, r *http.Request) {
 
 	newUUID := uuid.New()
 	job.Id = newUUID
-	job.Status = StatusPending
+	job.Status = models.StatusPending
 	job.CreatedAt = time.Now()
 
 	err = bs.queue.AddJob(queueName, job)
@@ -67,7 +68,7 @@ func (bs *BrokerServer) UpdateJob(w http.ResponseWriter, r *http.Request) {
 	queueName := r.PathValue("queueName")
 	jobId := r.PathValue("jobId")
 
-	var j Job
+	var j models.Job
 
 	err := json.NewDecoder(r.Body).Decode(&j)
 	if err != nil {

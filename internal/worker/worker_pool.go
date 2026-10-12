@@ -2,7 +2,7 @@ package worker
 
 import (
 	"github.com/google/uuid"
-	"github.com/lone4alker/tether/internal/broker"
+	"github.com/lone4alker/tether/internal/models"
 )
 
 type WorkerPool struct {
@@ -11,10 +11,10 @@ type WorkerPool struct {
 	workerCount    int
 	brokerEndpoint string
 	jobType        string
-	process        func(broker.Job) error
+	process        func(models.Job) error
 }
 
-func NewWorkerPool(workerCount int, brokerEndpoint string, jobType string, processFunc func(broker.Job) error) *WorkerPool {
+func NewWorkerPool(workerCount int, brokerEndpoint string, jobType string, processFunc func(models.Job) error) *WorkerPool {
 	w := make(map[uuid.UUID]*Worker)
 	stopCh := make(chan struct{})
 	return &WorkerPool{

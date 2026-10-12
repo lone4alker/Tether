@@ -3,47 +3,29 @@ package broker
 import (
 	"errors"
 	"sync"
-	"time"
 
 	"github.com/google/uuid"
+	"github.com/lone4alker/tether/internal/models"
 )
 
 var ErrJobNotFound = errors.New("No Job found in Queue")
 var ErrEmptyQueue = errors.New("queue is empty")
 var ErrNoJobAvailable = errors.New("No Jobs Available")
 
-type JobStatus string
-
-const (
-	StatusPending    JobStatus = "pending"
-	StatusInProgress JobStatus = "in_progress"
-	StatusCompleted  JobStatus = "completed"
-	StatusFailed     JobStatus = "failed"
-)
-
-type Job struct {
-	Id          uuid.UUID
-	Name        string
-	Payload     map[string]any
-	Status      JobStatus
-	CreatedAt   time.Time
-	CompletedAt time.Time
-}
-
 type Queue struct {
-	q  map[string][]Job
+	q  map[string][]models.Job
 	mu sync.RWMutex
 }
 
 func NewQueue() *Queue {
-	q := make(map[string][]Job)
+	q := make(map[string][]models.Job)
 	return &Queue{
 		q: q,
 	}
 }
 
 // Add Job
-func (qu *Queue) AddJob(queueName string, job Job) error {
+func (qu *Queue) AddJob(queueName string, job models.Job) error {
 	qu.mu.Lock()
 	defer qu.mu.Unlock()
 
@@ -53,12 +35,12 @@ func (qu *Queue) AddJob(queueName string, job Job) error {
 }
 
 // read a job without modifying it
-func (qu *Queue) ReadJobById(queueName string, jobId uuid.UUID) (Job, error) {
+func (qu *Queue) ReadJobById(queueName string, jobId uuid.UUID) (models.Job, error) {
 	qu.mu.RLock()
 	defer qu.mu.RUnlock()
 
 	jobs, ok := qu.q[queueName]
-	var j Job
+	var j models.Job
 	if ok {
 		for _, job := range jobs {
 			if job.Id == jobId {
@@ -73,16 +55,16 @@ func (qu *Queue) ReadJobById(queueName string, jobId uuid.UUID) (Job, error) {
 }
 
 // Request Job
-func (qu *Queue) RequestJob(queueName string) (Job, error) {
+func (qu *Queue) RequestJob(queueName string) (models.Job, error) {
 	qu.mu.Lock()
 	defer qu.mu.Unlock()
 	jobs, ok := qu.q[queueName]
-	var j Job
+	var j models.Job
 	if ok {
 		if len(jobs) > 0 {
 			for i := range jobs {
-				if jobs[i].Status == StatusPending {
-					jobs[i].Status = StatusInProgress
+				if jobs[i].Status == models.StatusPending {
+					jobs[i].Status = models.StatusInProgress
 					return jobs[i], nil
 				}
 			}
@@ -93,12 +75,12 @@ func (qu *Queue) RequestJob(queueName string) (Job, error) {
 }
 
 // update job
-func (qu *Queue) UpdateJob(queueName string, job Job) (Job, error) {
+func (qu *Queue) UpdateJob(queueName string, job models.Job) (models.Job, error) {
 	qu.mu.Lock()
 	defer qu.mu.Unlock()
 	// find the job
 	jobs, ok := qu.q[queueName]
-	var j Job
+	var j models.Job
 	if ok {
 		if len(jobs) == 0 {
 			return j, ErrEmptyQueue

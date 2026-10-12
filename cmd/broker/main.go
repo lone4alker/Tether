@@ -7,6 +7,7 @@ import (
 	"syscall"
 
 	"github.com/lone4alker/tether/internal/broker"
+	"github.com/lone4alker/tether/internal/models"
 	"github.com/lone4alker/tether/internal/worker"
 )
 
@@ -16,7 +17,7 @@ func main() {
 
 	brokerServer := broker.NewBrokerServer()
 
-	p := func(j broker.Job) error {
+	p := func(j models.Job) error {
 		return nil
 	}
 	workerPool := worker.NewWorkerPool(3, "http://localhost:8080", "email_job", p)

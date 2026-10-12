@@ -1,0 +1,26 @@
+package models
+
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
+
+type JobStatus string
+
+const (
+	StatusPending    JobStatus = "pending"
+	StatusInProgress JobStatus = "in_progress"
+	StatusCompleted  JobStatus = "completed"
+	StatusFailed     JobStatus = "failed"
+)
+
+type Job struct {
+	Id          uuid.UUID      `json:"id"`
+	Name        string         `json:"name"`
+	TaskType    string         `json:"task_type"`
+	Payload     map[string]any `json:"payload"`
+	Status      JobStatus      `json:"status"`
+	CreatedAt   time.Time      `json:"created_at"`
+	CompletedAt time.Time      `json:"completed_at"`
+}

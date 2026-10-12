@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/lone4alker/tether/internal/broker"
+	"github.com/lone4alker/tether/internal/models"
 )
 
 var NotFoundError = errors.New("job Id not found")
@@ -31,12 +31,12 @@ type Worker struct {
 	Id             uuid.UUID
 	State          WorkerState
 	BrokerEndpoint string
-	Process        func(broker.Job) error
+	Process        func(models.Job) error
 	JobType        string
 	logger         *slog.Logger
 }
 
-func NewWorker(brokerEndpoint string, proccesFunc func(broker.Job) error, jobType string) *Worker {
+func NewWorker(brokerEndpoint string, proccesFunc func(models.Job) error, jobType string) *Worker {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	return &Worker{
 		Id:             uuid.New(),
@@ -81,7 +81,7 @@ func (w *Worker) Start(stopCh <-chan struct{}) {
 					return
 				}
 
-				var job broker.Job
+				var job models.Job
 
 				// Decode the JSON response
 				if err := json.NewDecoder(resp.Body).Decode(&job); err != nil {
@@ -98,7 +98,7 @@ func (w *Worker) Start(stopCh <-chan struct{}) {
 	}
 }
 
-func (w *Worker) updateJobRequest(job broker.Job) error {
+func (w *Worker) updateJobRequest(job models.Job) error {
 	updateEndpoint := fmt.Sprintf("%s/queues/%s/jobs/%s", w.BrokerEndpoint, w.JobType, job.Id)
 
 	bodyBytes, err := json.Marshal(job)
@@ -149,13 +149,13 @@ func (w *Worker) updateJobRequest(job broker.Job) error {
 	return nil
 }
 
-func (w *Worker) ProcessJob(job broker.Job) {
+func (w *Worker) ProcessJob(job models.Job) {
 	if err := w.Process(job); err != nil {
 		w.logger.Error("job failed", "error", err, "job_id", job.Id, "job_type", w.JobType)
 		return
 	}
 
-	job.Status = broker.StatusCompleted
+	job.Status = models.StatusCompleted
 	job.CompletedAt = time.Now()
 
 	if updateErr := w.updateJobRequest(job); updateErr != nil {
