@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: tether-broker
+  labels:
+    app: tether-broker
+spec:
+  serviceName: tether-broker-headless
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tether-broker
+  template:
+    metadata:
+      labels:
+        app: tether-broker
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      securityContext:
+        fsGroup: 65532
+      containers:
+        - name: broker
+          image: ghcr.io/epaitoo/project-tether:23bdf8f01c8b613dd049afee10338356e87a4f52
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+              name: http
+          volumeMounts:
+            - name: wal
+              mountPath: /data
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
+  volumeClaimTemplates:
+    - metadata:
+        name: wal
+        labels:
+          app: tether-broker
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 1Gi

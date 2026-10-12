@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: tether-broker-headless
+  labels:
+    app: tether-broker
+spec:
+  clusterIP: None
+  selector:
+    app: tether-broker
+  ports:
+    - port: 8080
+      targetPort: http
+      name: http
