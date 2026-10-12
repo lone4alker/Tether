@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lone4alker/tether/internal/metrics"
 	"github.com/lone4alker/tether/internal/models"
 	"github.com/lone4alker/tether/internal/wal"
 	"github.com/google/uuid"
@@ -26,15 +27,17 @@ type Queue struct {
 	dlq     map[string][]models.Job
 	mu      sync.RWMutex
 	wal     *wal.WAL
+	metrics *metrics.Metrics
 }
 
-func NewQueue(w *wal.WAL) *Queue {
+func NewQueue(w *wal.WAL, m *metrics.Metrics) *Queue {
 	q := make(map[string][]models.Job)
 	dq := make(map[string][]models.Job)
 	return &Queue{
 		q:       q,
 		dlq:     dq,
 		wal:     w,
+		metrics: m,
 	}
 }
 

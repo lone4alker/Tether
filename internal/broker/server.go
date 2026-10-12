@@ -3,17 +3,21 @@ package broker
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
+	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lone4alker/tether/internal/metrics"
 	"github.com/lone4alker/tether/internal/models"
 	"github.com/lone4alker/tether/internal/wal"
 )
 
 type BrokerServer struct {
-	queue *Queue
+	queue   *Queue
+	metrics *metrics.Metrics
 }
 
 // POST /queues/{queueName}/jobs - AddJob
@@ -27,13 +31,15 @@ func NewBrokerServer(walPath string) (*BrokerServer, error) {
 		return nil, err
 	}
 
-	q := NewQueue(w)
+	m := &metrics.Metrics{}
+
+	q := NewQueue(w, m)
 
 	if err := q.Recover(); err != nil {
 		return nil, err
 	}
 
-	return &BrokerServer{queue: q}, nil
+	return &BrokerServer{queue: q, metrics: m}, nil
 }
 
 func (bs *BrokerServer) AddJob(w http.ResponseWriter, r *http.Request) {
@@ -56,6 +62,7 @@ func (bs *BrokerServer) AddJob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	bs.metrics.JobSubmitted()
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(job)
@@ -256,6 +263,7 @@ func (bs *BrokerServer) Start(port string) error {
 	http.HandleFunc("DELETE /queues/{queueName}/dlq/{jobId}", bs.DiscardDeadJobHandler)
 
 	http.HandleFunc("POST /jobs/{jobId}/fail", bs.FailOrRetryHandler)
+	http.HandleFunc("GET /metrics", bs.MetricsHandler)
 
 	err := http.ListenAndServe(port, nil)
 
@@ -266,6 +274,17 @@ func (bs *BrokerServer) Start(port string) error {
 	log.Printf("Server started on Port %s", port)
 
 	return nil
+}
+
+func (bs *BrokerServer) MetricsHandler(w http.ResponseWriter, r *http.Request) {
+	snap := bs.metrics.Snapshot()
+
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+	w.WriteHeader(http.StatusOK)
+
+	if _, err := io.WriteString(w, snap.Prometheus()); err != nil {
+		slog.Error("failed writing metrics response", "error", err)
+	}
 }
 
 func (bs *BrokerServer) StartLeaseChecker() {
