@@ -23,7 +23,7 @@ spec:
         fsGroup: 65532
       containers:
         - name: broker
-          image: ghcr.io/epaitoo/project-tether:23bdf8f01c8b613dd049afee10338356e87a4f52
+          image: ghcr.io/lone4alker/tether:23bdf8f01c8b613dd049afee10338356e87a4f52
           imagePullPolicy: Always
           ports:
             - containerPort: 8080
