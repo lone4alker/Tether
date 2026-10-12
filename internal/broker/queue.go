@@ -2,6 +2,7 @@ package broker
 
 import (
 	"errors"
+	"slices"
 	"sync"
 	"time"
 
@@ -12,17 +13,21 @@ import (
 var ErrJobNotFound = errors.New("No Job found in Queue")
 var ErrLeaseNotRenewable = errors.New("cannot renew lease not in progress")
 var ErrEmptyQueue = errors.New("queue is empty")
+var ErrJobNotInProgress = errors.New("job is not in progress")
 var ErrNoJobAvailable = errors.New("No Jobs Available")
 
 type Queue struct {
-	q  map[string][]models.Job
-	mu sync.RWMutex
+	q   map[string][]models.Job
+	dlq map[string][]models.Job
+	mu  sync.RWMutex
 }
 
 func NewQueue() *Queue {
 	q := make(map[string][]models.Job)
+	dq := make(map[string][]models.Job)
 	return &Queue{
-		q: q,
+		q:   q,
+		dlq: dq,
 	}
 }
 
@@ -65,7 +70,7 @@ func (qu *Queue) RequestJob(queueName string) (models.Job, error) {
 	if ok {
 		if len(jobs) > 0 {
 			for i := range jobs {
-				if jobs[i].Status == models.StatusPending {
+				if jobs[i].Status == models.StatusPending && time.Now().After(jobs[i].NextRunAt) {
 					jobs[i].Status = models.StatusInProgress
 					now := time.Now()
 					jobs[i].StartedAt = now
@@ -99,6 +104,7 @@ func (qu *Queue) UpdateJob(queueName string, job models.Job) (models.Job, error)
 					// update the job
 					jobs[i].Status = job.Status
 					jobs[i].CompletedAt = job.CompletedAt
+					jobs[i].RetryCount = job.RetryCount
 					return jobs[i], nil
 				}
 			}
@@ -108,19 +114,48 @@ func (qu *Queue) UpdateJob(queueName string, job models.Job) (models.Job, error)
 
 	return j, ErrJobNotFound
 }
+func applyFailOrRetry(job *models.Job) bool {
+	if job.RetryCount >= job.MaxRetries {
+		job.Status = models.StatusFailed
+		return true
+	} else {
+
+		delay := time.Duration(1<<job.RetryCount) * time.Second
+
+		job.Status = models.StatusPending
+		job.NextRunAt = time.Now().Add(delay)
+		job.RetryCount++
+		job.LeaseExpiresAt = time.Time{}
+		job.StartedAt = time.Time{}
+		return false
+	}
+}
+
 // method to check for expired leases
 func (qu *Queue) CheckForExpiredLeases() {
 	qu.mu.Lock()
 	defer qu.mu.Unlock()
 
 	for k, jobs := range qu.q {
+		survivors := make([]models.Job, 0, len(jobs))
 		for i := range jobs {
 			if time.Now().After(jobs[i].LeaseExpiresAt) && jobs[i].Status == models.StatusInProgress {
-				qu.q[k][i].Status = models.StatusPending
-				qu.q[k][i].LeaseExpiresAt = time.Time{}
-				qu.q[k][i].StartedAt = time.Time{}
+				updated := jobs[i]
+				dead := applyFailOrRetry(&updated)
+
+				if dead {
+					jobs[i] = updated
+					qu.dlq[k] = append(qu.dlq[k], jobs[i])
+				} else {
+					jobs[i] = updated
+					survivors = append(survivors, jobs[i])
+				}
+			} else {
+				survivors = append(survivors, jobs[i])
 			}
 		}
+
+		qu.q[k] = survivors
 	}
 }
 
@@ -153,4 +188,90 @@ func (qu *Queue) LeaseRenewal(queueName string, jobID uuid.UUID) (models.Job, er
 
 	return j, ErrJobNotFound
 
+}
+
+func (qu *Queue) FailOrRetry(jobID uuid.UUID) (*models.Job, error) {
+	qu.mu.Lock()
+	defer qu.mu.Unlock()
+
+	for k, jobs := range qu.q {
+		for i := range jobs {
+			if jobs[i].Id == jobID {
+				if jobs[i].Status != models.StatusInProgress {
+					return nil, ErrJobNotInProgress
+				}
+				updated := jobs[i]
+				dead := applyFailOrRetry(&updated)
+
+				if dead {
+					deadJob := updated
+
+					qu.q[k] = slices.Delete(jobs, i, i+1)
+					qu.dlq[k] = append(qu.dlq[k], deadJob)
+
+					return &deadJob, nil
+
+				}
+
+				jobs[i] = updated
+
+				return &jobs[i], nil
+
+			}
+		}
+	}
+
+	return nil, ErrJobNotFound
+}
+
+// dlq Operations
+func (qu *Queue) ListDeadLetter(queueName string) ([]models.Job, error) {
+	qu.mu.RLock()
+	defer qu.mu.RUnlock()
+
+	jobs := qu.dlq[queueName]
+	out := make([]models.Job, len(jobs))
+	copy(out, jobs)
+	return out, nil
+}
+
+func (qu *Queue) RedriveJob(queueName string, jobId uuid.UUID) (models.Job, error) {
+	qu.mu.Lock()
+	defer qu.mu.Unlock()
+
+	var j models.Job
+
+	// find the job
+	dlqJobs := qu.dlq[queueName]
+
+	for i := range dlqJobs {
+		if dlqJobs[i].Id == jobId {
+			dlqJobs[i].Status = models.StatusPending
+			dlqJobs[i].RetryCount = 0
+			dlqJobs[i].NextRunAt = time.Time{}
+
+			redriveJob := dlqJobs[i]
+			qu.q[queueName] = append(qu.q[queueName], redriveJob)
+			qu.dlq[queueName] = slices.Delete(dlqJobs, i, i+1)
+			return redriveJob, nil
+		}
+	}
+
+	return j, ErrJobNotFound
+}
+
+func (qu *Queue) DiscardDeadJob(queueName string, jobId uuid.UUID) error {
+	qu.mu.Lock()
+	defer qu.mu.Unlock()
+	// find the job
+	dlqJobs := qu.dlq[queueName]
+
+	for i := range dlqJobs {
+		if dlqJobs[i].Id == jobId {
+			qu.dlq[queueName] = slices.Delete(dlqJobs, i, i+1)
+			return nil
+		}
+	}
+
+	return ErrJobNotFound
 }

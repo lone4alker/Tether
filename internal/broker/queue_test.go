@@ -104,6 +104,7 @@ func TestUpdateJob(t *testing.T) {
 	res, _ := q.RequestJob("email")
 	res.Status = models.StatusCompleted
 	res.CompletedAt = time.Now()
+	res.RetryCount = 1
 
 	job, err := q.UpdateJob("email", res)
 
@@ -119,6 +120,10 @@ func TestUpdateJob(t *testing.T) {
 		t.Errorf("got %v, wanted %v", job.CompletedAt, res.CompletedAt)
 	}
 
+	if job.RetryCount != res.RetryCount {
+		t.Errorf("got %v, wanted %v", job.RetryCount, res.RetryCount)
+	}
+
 	if job.Name != j.Name {
 		t.Errorf("Name was overwritten: got %v, wanted %v", job.Name, j.Name)
 	}
@@ -130,27 +135,53 @@ func TestUpdateJob(t *testing.T) {
 }
 
 func TestCheckForExpiredLeases(t *testing.T) {
+
+	type expectedOutcomes struct {
+		jobStatus      models.JobStatus
+		retryCount     int
+		leaseExpiresAt time.Time
+		startedAt      time.Time
+		inDLQ          bool
+	}
+
+	type jobInputs struct {
+		jobStatus              models.JobStatus
+		leaseExpiresAt         time.Time
+		retryCount, maxRetries int
+	}
+
 	expiredLease := time.Now().Add(-1 * time.Hour)
 	futureLease := time.Now().Add(1 * time.Hour)
 
 	tests := []struct {
-		name           string
-		status         models.JobStatus
-		leaseExpiresAt time.Time
-		wantStatus     models.JobStatus
+		name     string
+		input    jobInputs
+		expected expectedOutcomes
 	}{
-		{"StatusInProgress_and_lease expired", models.StatusInProgress, expiredLease, models.StatusPending},
-		{"Job_is_StatusInProgress_+_lease_not_expired", models.StatusInProgress, futureLease, models.StatusInProgress},
-		{"Job_is_StatusPending_+_lease_expired", models.StatusPending, time.Time{}, models.StatusPending},
-		{"Job_is_StatusCompleted_+_lease_expired", models.StatusCompleted, expiredLease, models.StatusCompleted},
+		{"StatusInProgress_and_lease expired",
+			jobInputs{jobStatus: models.StatusInProgress, leaseExpiresAt: expiredLease, retryCount: 3, maxRetries: 3},
+			expectedOutcomes{jobStatus: models.StatusFailed, retryCount: 3, leaseExpiresAt: expiredLease, inDLQ: true}},
+
+		{"RetryCount_<_MaxRetries", jobInputs{jobStatus: models.StatusInProgress, leaseExpiresAt: expiredLease, retryCount: 0, maxRetries: 4},
+			expectedOutcomes{jobStatus: models.StatusPending, retryCount: 1, leaseExpiresAt: time.Time{}, startedAt: time.Time{}}},
+
+		{"Job_is_StatusInProgress_+_lease_not_expired", jobInputs{jobStatus: models.StatusInProgress, leaseExpiresAt: futureLease},
+			expectedOutcomes{jobStatus: models.StatusInProgress, leaseExpiresAt: futureLease}},
+
+		{"Job_is_StatusPending_+_lease_expired", jobInputs{jobStatus: models.StatusPending}, expectedOutcomes{jobStatus: models.StatusPending}},
+
+		{"Job_is_StatusCompleted_+_lease_expired", jobInputs{jobStatus: models.StatusCompleted, leaseExpiresAt: expiredLease},
+			expectedOutcomes{jobStatus: models.StatusCompleted, leaseExpiresAt: expiredLease}},
 	}
 
 	for _, tt := range tests {
 		q := newTestQueue(t)
 		j := createJob()
 		j.Id = uuid.New()
-		j.Status = tt.status
-		j.LeaseExpiresAt = tt.leaseExpiresAt
+		j.Status = tt.input.jobStatus
+		j.LeaseExpiresAt = tt.input.leaseExpiresAt
+		j.RetryCount = tt.input.retryCount
+		j.MaxRetries = tt.input.maxRetries
 
 		t.Run(tt.name, func(t *testing.T) {
 			if err := q.AddJob("email", j); err != nil {
@@ -159,14 +190,39 @@ func TestCheckForExpiredLeases(t *testing.T) {
 
 			q.CheckForExpiredLeases()
 
-			res, _ := q.ReadJobById("email", j.Id)
-
-			if res.Status != tt.wantStatus {
-				t.Errorf("got %v, wanted %v", res.Status, tt.wantStatus)
+			var res models.Job
+			if tt.expected.inDLQ {
+				dlq, _ := q.ListDeadLetter("email")
+				for _, dj := range dlq {
+					if dj.Id == j.Id {
+						res = dj
+						break
+					}
+				}
+			} else {
+				res, _ = q.ReadJobById("email", j.Id)
 			}
+
+			if res.Status != tt.expected.jobStatus {
+				t.Errorf("got %v, wanted %v", res.Status, tt.expected.jobStatus)
+			}
+
+			if res.RetryCount != tt.expected.retryCount {
+				t.Errorf("got %v, wanted %v", res.RetryCount, tt.expected.retryCount)
+			}
+
+			if res.LeaseExpiresAt != tt.expected.leaseExpiresAt {
+				t.Errorf("got %v, wanted %v", res.LeaseExpiresAt, tt.expected.leaseExpiresAt)
+			}
+
+			if res.StartedAt != tt.expected.startedAt {
+				t.Errorf("got %v, wanted %v", res.StartedAt, tt.expected.startedAt)
+			}
+
 		})
 	}
 }
+
 func TestLeaseRenewal(t *testing.T) {
 	const queueName = "email"
 

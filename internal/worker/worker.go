@@ -205,6 +205,48 @@ func (w *Worker) sendHeartbeat(job models.Job) error {
 	return nil
 }
 
+func (w *Worker) UpdateFailedJob(job models.Job) error {
+	endpoint := fmt.Sprintf("%s/jobs/%s/fail", w.BrokerEndpoint, job.Id)
+	bodyBytes, err := json.Marshal(job)
+
+	if err != nil {
+		return fmt.Errorf("error marshalling bodybytes: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	postBody := bytes.NewBuffer(bodyBytes)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, postBody)
+
+	if err != nil {
+		return fmt.Errorf("error making http post request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	res, err := client.Do(req)
+
+	if err != nil {
+		return fmt.Errorf("error, request failed: %w", err)
+	}
+
+	defer res.Body.Close()
+
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return fmt.Errorf("unexpected status: %s", res.Status)
+	}
+
+	if _, err := io.ReadAll(res.Body); err != nil {
+		return fmt.Errorf("error %w", err)
+	}
+
+	w.logger.Info("job failure reported to broker", "job_id", job.Id, "job_type", w.JobType, "status", res.Status)
+
+	return nil
+}
+
 func (w *Worker) ProcessJob(job models.Job, stopCh <-chan struct{}) {
 	resultCh := make(chan error, 1)
 
@@ -227,7 +269,11 @@ func (w *Worker) ProcessJob(job models.Job, stopCh <-chan struct{}) {
 			}
 		case err := <-resultCh:
 			if err != nil {
-				w.logger.Error("job failed", "error", err, "job_id", job.Id, "job_type", w.JobType)
+				failedErr := w.UpdateFailedJob(job)
+
+				if failedErr != nil {
+					w.logger.Error("failed to report job failure to broker", "error", failedErr, "job_id", job.Id, "job_type", w.JobType)
+				}
 				return
 			}
 
